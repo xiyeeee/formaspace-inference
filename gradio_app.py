@@ -539,7 +539,10 @@ def build_app():
                 num_chunks,
                 randomize_seed,
             ],
-            outputs=[file_out, html_gen_mesh, stats, seed]
+            outputs=[file_out, html_gen_mesh, stats, seed],
+            # Both generation endpoints share the pipeline and its mutable scheduler.
+            concurrency_id='hunyuan_pipeline',
+            concurrency_limit=1,
         ).then(
             lambda: (gr.update(visible=False, value=False), gr.update(interactive=True), gr.update(interactive=True),
                      gr.update(interactive=False)),
@@ -566,7 +569,9 @@ def build_app():
                 num_chunks,
                 randomize_seed,
             ],
-            outputs=[file_out, file_out2, html_gen_mesh, stats, seed]
+            outputs=[file_out, file_out2, html_gen_mesh, stats, seed],
+            concurrency_id='hunyuan_pipeline',
+            concurrency_limit=1,
         ).then(
             lambda: (gr.update(visible=True, value=True), gr.update(interactive=False), gr.update(interactive=True),
                      gr.update(interactive=False)),

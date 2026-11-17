@@ -1,6 +1,10 @@
 [中文阅读](README_zh_cn.md)
 [日本語で読む](README_ja_jp.md)
 
+FormaSpace additions: [HTTP/WebSocket task service and Java integration](docs/inference-service-v1.md),
+[real intermediate point-cloud probe](docs/preview-probe.md).
+The task service uses port 8001 and one resident inference worker; run it separately from Gradio.
+
 <p align="center"> 
   <img src="https://github.com/user-attachments/assets/efb402a1-0b09-41e0-a6cb-259d442e76aa">
 

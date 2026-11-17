@@ -38,3 +38,5 @@ rembg
 onnxruntime
 #gevent
 #geventhttpclient
+# Native WebSocket transport for the standalone inference task service
+websockets==15.0.1
