@@ -188,6 +188,20 @@ class TaskStore:
             for subscriber in tuple(task.subscribers):
                 subscriber.offer(event)
 
+    def preview_metadata(self, task_id, version):
+        # Journal is authoritative, persisted before notification; preserve every successful version.
+        with self.lock:
+            self.find(task_id)
+            if version < 1:
+                return None
+            with (self.directory(task_id) / "events.jsonl").open() as stream:
+                for line in stream:
+                    event = json.loads(line)
+                    if event["type"] == "preview_ready" and event["previewVersion"] == version:
+                        return {"version": version, **{key: event["payload"][key]
+                                for key in ("sourceStep", "pointCount", "positionsPath")}}
+            return None
+
     def subscribe(self, task_id, loop):
         # Capture snapshot and register future events in the same critical section.
         with self.lock:

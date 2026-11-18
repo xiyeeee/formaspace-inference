@@ -120,7 +120,7 @@ def create_app(settings=None, engine_factory=None):
         if len(parameters) > 4096:
             raise ServiceError(422, "INVALID_PARAMETERS", "参数内容过长")
         try:
-            parsed = TaskParameters.model_validate_json(parameters).model_dump()
+            parsed = TaskParameters.model_validate_json(parameters).model_dump(exclude_none=True)
         except (ValidationError, ValueError):
             raise ServiceError(422, "INVALID_PARAMETERS", "推理参数不支持或超出范围") from None
         data = image.file.read(settings.max_upload_bytes + 1)
@@ -137,8 +137,8 @@ def create_app(settings=None, engine_factory=None):
     @app.get("/api/v1/tasks/{task_id}/previews/{version}")
     def preview(task_id: UUID, version: int):
         state = manager.store.snapshot(str(task_id))
-        latest = state["latestPreview"]
-        if not latest or version != latest["version"]:
+        latest = manager.store.preview_metadata(str(task_id), version)
+        if not latest:
             raise ServiceError(404, "PREVIEW_NOT_FOUND", "点云尚未就绪或版本不存在")
         path = manager.store.directory(str(task_id)) / f"preview_step_{latest['sourceStep']:03d}.json"
         if not path.is_file():

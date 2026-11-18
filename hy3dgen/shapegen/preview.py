@@ -34,6 +34,7 @@ class ProbeConfig:
     preview_resolution: int = 128
     num_chunks: int = 4000
     point_count: int = 5000
+    preview_stages: tuple = ()
 
 
 class UnsafePreviewError(RuntimeError):
@@ -163,13 +164,19 @@ class PreviewProbe:
         self.directory = directory
         self.enabled = enabled
         self.events = journal if journal is not None else EventJournal(directory, config.steps)
+        self.previews = []
         self.preview = {"status": "pending" if enabled else "disabled", "actualStep": None,
                         "pointCount": 0, "elapsedSeconds": None, "decodeSeconds": None,
                         "randomStateUnchanged": None, "changedRandomGenerators": []}
 
-    def decode_preview(self, pipeline, outputs):
+    def decode_preview(self, pipeline, outputs, stage=None):
         config = self.config
+        resolution = stage["resolution"] if stage else config.preview_resolution
+        count = stage["pointCount"] if stage else config.point_count
         started = time.perf_counter()
+        self.preview.update(status="pending", randomStateUnchanged=None, changedRandomGenerators=[])
+        self.preview.pop("error", None)
+        self.preview["resolution"] = resolution
         self.preview["actualStep"] = self.events.completed_steps
         self.events.emit("preview_started", "preview_decoding")
         before = None
@@ -184,7 +191,7 @@ class PreviewProbe:
             with redirect_stderr(diagnostics):
                 decoded = pipeline._export(
                     latents=snapshot, output_type="trimesh", box_v=1.01, mc_level=0.0,
-                    num_chunks=config.num_chunks, octree_resolution=config.preview_resolution,
+                    num_chunks=min(config.num_chunks, 2000), octree_resolution=resolution,
                     mc_algo="mc", enable_pbar=False,
                 )
             synchronize(config.device)
@@ -193,7 +200,7 @@ class PreviewProbe:
             if is_device_failure(diagnostics.getvalue()):
                 raise UnsafePreviewError("Device failure reported inside surface extraction")
             mesh = require_mesh(decoded)
-            points = sample_surface(mesh, config.point_count, np.random.default_rng(config.seed))
+            points = sample_surface(mesh, count, np.random.default_rng(config.seed))
             if not torch.equal(snapshot, outputs.prev_sample):
                 raise UnsafePreviewError("Preview decoding modified its latent input")
             after = random_fingerprints(config.device)
@@ -224,6 +231,11 @@ class PreviewProbe:
             if fatal:
                 raise UnsafePreviewError("Preview device/state failure; sampling cannot safely continue") from error
         finally:
+            self.previews.append(dict(self.preview))
+            if config.device == "mps":
+                # Drop temporary decode references before releasing the allocator cache.
+                snapshot = decoded = mesh = points = None
+                torch.mps.empty_cache()
             if diagnostics.getvalue():
                 LOGGER.error("Decoder diagnostics (including swallowed traceback):\n%s", diagnostics.getvalue())
 
@@ -231,7 +243,7 @@ class PreviewProbe:
         started = time.perf_counter()
         config = self.config
         summary = {"taskId": self.events.task_id, "model": asdict(config), "seed": config.seed,
-                   "preview": self.preview, "finalStatus": "running",
+                   "preview": self.preview, "previews": self.previews, "finalStatus": "running",
                    "synchronousPreviewPausesSampling": True, "previewEnabled": self.enabled}
         self.events.emit("task_started", "sampling", previewEnabled=self.enabled)
 
@@ -243,8 +255,11 @@ class PreviewProbe:
             self.events.completed_steps = completed
             self.events.emit("sampling_step", "sampling", timestep=float(timestep.item()))
             LOGGER.info("%s completed %d/%d", self.events.task_id, completed, config.steps)
-            if self.enabled and completed == config.preview_step:
-                self.decode_preview(pipeline, outputs)
+            stages = config.preview_stages or ({"step": config.preview_step,
+                       "resolution": config.preview_resolution, "pointCount": config.point_count},)
+            for stage in stages:
+                if self.enabled and completed == stage["step"]:
+                    self.decode_preview(pipeline, outputs, stage)
             if completed == config.steps:
                 self.events.emit("finalizing", "final_decoding")
 

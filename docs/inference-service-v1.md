@@ -58,7 +58,7 @@ Authorization: Bearer <INFERENCE_API_TOKEN>
 {"seed":1234,"steps":30,"guidanceScale":5.0,"finalResolution":256,"previewEnabled":true,"previewStep":24,"previewResolution":128,"pointCount":5000,"numChunks":4000}
 ```
 
-范围：seed=0～10000000、steps=2～50、guidanceScale=0～10（有限数值）、finalResolution=128/256、previewResolution=64/128、pointCount=1～5000、numChunks=1000～8000。开启预览时必须 `1 <= previewStep < steps`，每个任务最多一次预览。未知字段、非布尔 previewEnabled、非整数整数字段、NaN/Infinity 均拒绝。
+范围：seed=0～10000000、steps=2～50、guidanceScale=0～10（有限数值）、finalResolution=128/256、previewResolution=64/128、pointCount=1～5000、numChunks=1000～8000。未传阶段计划且开启预览时必须 `1 <= previewStep < steps`，未传 previewStages 时每个任务最多一次预览；显式阶段计划支持最多三版，见 [多阶段真实预览](multistage-preview.md)。未知字段、非布尔 previewEnabled、非整数整数字段、NaN/Infinity 均拒绝。
 
 固定模型 `tencent/Hunyuan3D-2mini/hunyuan3d-dit-v2-mini`，无纹理，使用与 Gradio 默认路径相同的 RGBA 转换、去背景开启、pipeline ImageProcessorV2。新协议没有 removeBackground/generateTexture 字段，不要直接透传旧 Gradio 参数。quality 由 Java 自己映射，不能作为 Python 参数发送。
 

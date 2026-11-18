@@ -159,3 +159,41 @@ class PreviewProbeTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class MultiStagePreviewTests(unittest.TestCase):
+    def test_real_callback_latents_three_budgets_and_contiguous_success_versions(self):
+        stages = ({'step': 6, 'resolution': 64, 'pointCount': 1000},
+                  {'step': 15, 'resolution': 96, 'pointCount': 2500},
+                  {'step': 24, 'resolution': 128, 'pointCount': 5000})
+        with tempfile.TemporaryDirectory() as directory:
+            pipeline = FakePipeline()
+            PreviewProbe(ProbeConfig(device='cpu', preview_stages=stages), Path(directory)).run(pipeline, None)
+            self.assertEqual([item['octree_resolution'] for item in pipeline.snapshots], [64, 96, 128])
+            self.assertEqual([item['latents'][0, 0, 0].item() for item in pipeline.snapshots], [6, 15, 24])
+            for stage in stages:
+                points = json.loads((Path(directory) / f"preview_step_{stage['step']:03d}.json").read_text())
+                self.assertEqual(len(points['positions']), stage['pointCount'])
+            events = [json.loads(line) for line in (Path(directory) / 'events.jsonl').read_text().splitlines()]
+            self.assertEqual([event['previewVersion'] for event in events if event['type'] == 'preview_saved'], [1, 2, 3])
+            summary = json.loads((Path(directory) / 'summary.json').read_text())
+            self.assertEqual(len(summary['previews']), 3)
+            self.assertTrue(all(item['randomStateUnchanged'] for item in summary['previews']))
+
+    def test_ordinary_early_failure_still_decodes_later_stages_and_final(self):
+        stages = ({'step': 6, 'resolution': 64, 'pointCount': 1000},
+                  {'step': 24, 'resolution': 128, 'pointCount': 5000})
+        with tempfile.TemporaryDirectory() as directory:
+            pipeline = FakePipeline()
+            original = pipeline._export
+            attempts = 0
+            def decode(**kwargs):
+                nonlocal attempts
+                attempts += 1
+                if attempts == 1:
+                    raise ValueError('No early surface')
+                return original(**kwargs)
+            with patch.object(pipeline, '_export', side_effect=decode):
+                PreviewProbe(ProbeConfig(device='cpu', preview_stages=stages), Path(directory)).run(pipeline, None)
+            events = [json.loads(line) for line in (Path(directory) / 'events.jsonl').read_text().splitlines()]
+            self.assertEqual([event['previewVersion'] for event in events if event['type'] == 'preview_saved'], [1])
+            self.assertTrue((Path(directory) / 'final.glb').exists())

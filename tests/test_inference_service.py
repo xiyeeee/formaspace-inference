@@ -76,7 +76,8 @@ class StubEngine:
         self.calls.append(task.task_id)
         self.start_gate.wait(10)
         parameters = task.parameters
-        config = ProbeConfig(device='cpu', steps=parameters['steps'], preview_step=parameters['previewStep'])
+        config = ProbeConfig(device='cpu', steps=parameters['steps'], preview_step=parameters['previewStep'],
+                             preview_stages=tuple(parameters.get('previewStages') or ()))
         probe = PreviewProbe(config, store.directory(task.task_id), enabled=parameters['previewEnabled'],
                              journal=ServiceJournal(store, task))
         if self.fail_preview or self.device_failure:
@@ -122,6 +123,40 @@ class ServiceProtocolTests(unittest.TestCase):
                 return state
             time.sleep(0.01)
         self.fail('Task did not complete')
+
+    def test_legacy_persisted_request_fingerprint_survives_optional_plan_addition(self):
+        task_id = str(uuid4())
+        legacy = TaskParameters().model_dump(exclude_none=True)
+        self.assertNotIn('previewStages', legacy)
+        self.app.state.manager.store.create(task_id, legacy, image_bytes())
+        response = self.submit(task_id=task_id)
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.json()['taskId'], task_id)
+        self.assertEqual(self.engine.calls, [])
+
+    def test_all_three_preview_versions_remain_readable_after_final(self):
+        stages = [{'step': 6, 'resolution': 64, 'pointCount': 1000},
+                  {'step': 15, 'resolution': 96, 'pointCount': 2500},
+                  {'step': 24, 'resolution': 128, 'pointCount': 5000}]
+        response = self.submit(parameters={'previewStages': stages})
+        self.assertEqual(response.status_code, 202)
+        task_id = response.json()['taskId']
+        self.engine.release()
+        state = self.wait_completed(task_id)
+        self.assertEqual(state['previewVersion'], 3)
+        for version, stage in enumerate(stages, 1):
+            result = self.client.get(f'/api/v1/tasks/{task_id}/previews/{version}', headers=self.headers)
+            self.assertEqual(result.status_code, 200)
+            self.assertEqual(result.json()['sourceStep'], stage['step'])
+            self.assertEqual(len(result.json()['positions']), stage['pointCount'])
+        self.assertEqual(self.client.get(f'/api/v1/tasks/{task_id}/previews/4', headers=self.headers).status_code, 404)
+
+    def test_rejects_unordered_duplicate_or_oversized_preview_plans(self):
+        for stages in ([{'step': 15, 'resolution': 96, 'pointCount': 2500}, {'step': 6, 'resolution': 64, 'pointCount': 1000}],
+                       [{'step': 30, 'resolution': 128, 'pointCount': 5000}],
+                       [{'step': 6, 'resolution': 256, 'pointCount': 1000}],
+                       [{'step': 6, 'resolution': 64, 'pointCount': 5001}]):
+            self.assertEqual(self.submit(parameters={'previewStages': stages}).status_code, 422)
 
     def test_snapshot_progress_disconnect_preview_recovery_finalizing_and_terminal_subscription(self):
         started = time.monotonic()

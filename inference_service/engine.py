@@ -63,6 +63,7 @@ class HunyuanEngine:
             device=self.device, guidance_scale=parameters["guidanceScale"],
             final_resolution=parameters["finalResolution"], preview_resolution=parameters["previewResolution"],
             num_chunks=parameters["numChunks"], point_count=parameters["pointCount"],
+            preview_stages=tuple(parameters.get("previewStages") or ()),
         )
         directory = store.directory(task.task_id)
         image = prepare_image(directory / "input.image", self.remover)
