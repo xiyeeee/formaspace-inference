@@ -66,11 +66,23 @@ class SurfaceExtractor:
 
 class MCSurfaceExtractor(SurfaceExtractor):
     def run(self, grid_logit, *, mc_level, bounds, octree_resolution, **kwargs):
-        vertices, faces, normals, _ = measure.marching_cubes(
-            grid_logit.cpu().numpy(),
-            mc_level,
-            method="lewiner"
-        )
+        volume = grid_logit.cpu().numpy()
+        try:
+            vertices, faces, normals, _ = measure.marching_cubes(
+                volume, mc_level, method="lewiner"
+            )
+        except (ValueError, RuntimeError) as error:
+            # Sparse decoders may intentionally leave NaNs outside evaluated cells.
+            # Diagnose failures without changing the requested level or filling the field.
+            finite = np.isfinite(volume)
+            finite_values = volume[finite]
+            minimum = float(finite_values.min()) if finite_values.size else None
+            maximum = float(finite_values.max()) if finite_values.size else None
+            raise RuntimeError(
+                f"Marching Cubes failed: level={mc_level}, resolution={octree_resolution}, "
+                f"shape={volume.shape}, finite={int(finite.sum())}/{volume.size}, "
+                f"finite_min={minimum}, finite_max={maximum}; {error}"
+            ) from error
         grid_size, bbox_min, bbox_size = self._compute_box_stat(bounds, octree_resolution)
         vertices = vertices / grid_size * bbox_size + bbox_min
         return vertices, faces

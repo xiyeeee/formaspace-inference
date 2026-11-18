@@ -165,7 +165,7 @@ class PreviewProbe:
         self.events = journal if journal is not None else EventJournal(directory, config.steps)
         self.preview = {"status": "pending" if enabled else "disabled", "actualStep": None,
                         "pointCount": 0, "elapsedSeconds": None, "decodeSeconds": None,
-                        "randomStateUnchanged": None}
+                        "randomStateUnchanged": None, "changedRandomGenerators": []}
 
     def decode_preview(self, pipeline, outputs):
         config = self.config
@@ -196,9 +196,12 @@ class PreviewProbe:
             points = sample_surface(mesh, config.point_count, np.random.default_rng(config.seed))
             if not torch.equal(snapshot, outputs.prev_sample):
                 raise UnsafePreviewError("Preview decoding modified its latent input")
-            self.preview["randomStateUnchanged"] = before == random_fingerprints(config.device)
+            after = random_fingerprints(config.device)
+            self.preview["changedRandomGenerators"] = [name for name in before if before[name] != after[name]]
+            self.preview["randomStateUnchanged"] = not self.preview["changedRandomGenerators"]
             if not self.preview["randomStateUnchanged"]:
-                raise UnsafePreviewError("Preview changed a global random generator")
+                raise UnsafePreviewError("Global random state changed during preview: "
+                                         + ", ".join(self.preview["changedRandomGenerators"]))
             ply_path, json_path = save_points(self.directory, self.events.completed_steps, points)
             self.preview.update(status="succeeded", pointCount=len(points),
                                 elapsedSeconds=time.perf_counter() - started)

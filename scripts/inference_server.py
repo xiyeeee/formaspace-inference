@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import uvicorn
 from inference_service.app import create_app
 from inference_service.config import Settings
+from inference_service.websocket_protocol import IsolatedHeartbeatProtocol
 
 
 def main():
@@ -22,7 +23,7 @@ def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s",
                         handlers=[logging.FileHandler(settings.root / "service.log"), logging.StreamHandler()])
     uvicorn.run(create_app(settings), host=args.host, port=args.port, workers=1, reload=False,
-                ws="websockets", ws_max_size=4096, ws_max_queue=8)
+                ws=IsolatedHeartbeatProtocol, ws_max_size=4096, ws_max_queue=8)
 
 
 if __name__ == "__main__":

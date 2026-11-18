@@ -129,6 +129,12 @@ curl -f "http://127.0.0.1:8001/api/v1/tasks/$TASK_ID/result" -H "Authorization: 
 
 推理线程先 fsync events.jsonl，再更新并原子保存 snapshot.json，最后通知异步发送层。线程到异步桥接是有界 deque，合并唤醒通知，不为每条事件无限积累 asyncio 回调。GPU 回调不等待网络；慢连接缓冲溢出或发送超时以 **1013** 关闭，客户端必须通过快照恢复，不能当作收到完整终态。正常断线仅注销订阅，不取消任务。
 
+WebSocket 心跳使用 `IsolatedHeartbeatProtocol`：继承当前 Uvicorn transport 的超时、Ping/Pong 和关闭行为，但用 `secrets.token_bytes` 生成 Ping 内容。安装版本的 websockets legacy 默认心跳调用进程全局 `random.getrandbits`；它可能与预览并发，导致 RNG 审计误判。必须使用本文启动脚本，不能改回默认 `ws="websockets"`。没有关闭心跳、禁用 RNG 审计或回滚全局随机状态；内部 summary 现额外记录 changedRandomGenerators，真实推理污染 RNG 时仍失败。
+
+2026-11-18 已补心跳回归：直接调用安装版本的默认 ping 可重现 Python 全局 RNG 变化；新 transport 连续 ping 与显式 payload/重复保护测试通过。另以真实 Uvicorn + WebSocket、10 ms 心跳和受控慢预览验证心跳实际落在预览窗口内，任务仍完成，RNG 审计保持通过；人为注入 NumPy 全局随机消费仍被拒绝，并记录 changedRandomGenerators=[numpy]。共 29 项测试通过，无依赖升级。
+
+还使用失败任务 8 的原图片字节和完整参数（seed=5920516、30 步、24 步预览、256/128、5000 点、numChunks=4000）执行真实 MPS 复验，新 Python 任务 `4117b700-120c-41ea-a936-60532ae5876c` 成功生成点云并完成 GLB 下载（6,137,504 字节）；预览解码 5.71 秒，RNG 状态未变。该长连接收到 3 个服务端心跳，但本次真实 MPS 的预览窗口恰好未与心跳重叠；强制窗口重叠由前述网络回归覆盖。报告位于 `~/.formaspace/rng-heartbeat-check-20261118/summary.json`，不改写 Java 原失败任务状态。
+
 ## 重连、持久化与 Java 接入
 
 Java 端本轮未修改、未运行本协议联调；当前旧 Gradio 客户端不会自动切换到新服务。这是新增协议适配，不是对 Gradio 的路径别名。
@@ -193,3 +199,15 @@ Java 开发者需要：
 未执行：Java 原生 WS 客户端联调、前端点云转发、远端 GPU/TLS/代理部署、多机并发或真实 GPU OOM。普通预览失败、队列压力和慢订阅者使用受控假推理器验证，没有将其冒充真实 GPU 故障测试。本轮没有修改 Java 或前端，没有自动替换 Java 的旧 Gradio 连接配置。
 
 文件职责：`scripts/inference_server.py` 启动；`inference_service/app.py` HTTP/WS；config/parameters 配置校验；store 持久化/快照；subscriptions 有界通知；worker 单线程队列；engine 真实推理与协议适配；`hy3dgen/shapegen/preview.py` 共享真实预览；`scripts/check_inference_service.py` 显式真实网络验收；`tests/test_inference_service.py` 离线协议验收。`scripts/preview_probe.py` 保留对照命令，requirements.txt 仅增加 websockets 固定版本。
+
+## No surface found 与 Gradio 的 None.faces
+
+`marching_cubes` 的 `No surface found at the given iso value` 表示当前标量场在指定等值面下未能生成表面。仅凭该异常不能确定是图片、参数还是数值异常，也不能据此自动更换等值面。稀疏解码器可能有意保留未评估区域的 NaN，不能对所有非有限区域直接填零。
+
+MCSurfaceExtractor 现于失败时记录 level、resolution、网格 shape、有限值数量、有限值 min/max，并保留原始异常链。外层仍保留批量失败项为 None 的已有约定；Gradio 在读取 faces/vertices 前复用 require_mesh 校验，空容器、None 或无效网格会显示明确的“未能提取有效模型表面”提示，不再触发二次 AttributeError。每次 Gradio 推理还会记录实际固定 seed、模型和解析后的参数，便于复现。
+
+排查时保存输入图片、实际 seed（随机模式应看日志中的最终值）、步数、guidance、分辨率、num_chunks、去背景设置以及完整解码日志。有限值数量为 0 时重点排查数值异常；范围不包含目标 level 时说明当前场无法在该 level 提取表面；范围包含目标值也不保证一定有可用表面。不会自动调整阈值、换模型或返回伪造 GLB。
+
+堆栈含 gradio/queueing.py、gradio_app.py 时走的是 Gradio 入口，通常为 7860，并非本文 8001 常驻服务。修改 Python 后需要重启对应入口才能加载新诊断；两个入口不要同时占用 GPU。
+
+2026-11-18 修复验证：24 项离线测试通过，含无表面/全 NaN 标量场、正常平面坐标、批处理 None 约定，以及 Gradio 无效网格提示和有效网格回归。重启原 mini/MPS/disable_tex Gradio 并加载本次修复后，004.png、seed=1234、30 步、guidance=5、resolution=256、num_chunks=4000、去背景开启的真实对照成功：198,828 顶点、397,656 面，GLB 7,159,044 字节。对照不代表原失败图片已验证；原图片与实际参数尚未提供，不能宣称原始无表面问题的根因已定位。当前日志 `/tmp/formaspace-gradio-surface.log`，客户端对照日志 `/tmp/formaspace-gradio-surface-recheck.log`。

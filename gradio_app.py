@@ -28,6 +28,7 @@ from fastapi.staticfiles import StaticFiles
 import uuid
 
 from hy3dgen.shapegen.utils import logger
+from hy3dgen.shapegen.preview import require_mesh
 
 MAX_SEED = int(1e7)
 
@@ -215,6 +216,7 @@ def _gen_shape(
 
     generator = torch.Generator()
     generator = generator.manual_seed(int(seed))
+    logger.info("Shape generation request: model=%s, params=%s", stats['model']['shapegen'], stats['params'])
     outputs = i23d_worker(
         image=image,
         num_inference_steps=steps,
@@ -228,7 +230,13 @@ def _gen_shape(
     logger.info("---Shape generation takes %s seconds ---" % (time.time() - start_time))
 
     tmp_start = time.time()
-    mesh = export_to_trimesh(outputs)[0]
+    try:
+        meshes = export_to_trimesh(outputs) if isinstance(outputs, list) else []
+        mesh = require_mesh(meshes)
+    except ValueError as error:
+        logger.exception("Shape generation returned no valid mesh: model=%s, params=%s",
+                         stats['model']['shapegen'], stats['params'])
+        raise gr.Error("未能提取有效模型表面，本次生成失败。请记录随机种子和参数，并检查终端中的解码日志。") from error
     time_meta['export to trimesh'] = time.time() - tmp_start
 
     stats['number_of_faces'] = mesh.faces.shape[0]

@@ -103,6 +103,25 @@ class PreviewProbeTests(unittest.TestCase):
         self.assertEqual(summary['finalStatus'], 'failed')
         self.assertFalse((self.directory / 'final.glb').exists())
 
+    def test_actual_preview_rng_consumption_still_aborts_with_generator_name(self):
+        pipeline = FakePipeline()
+        original_export = pipeline._export
+        previous = np.random.get_state()
+        self.addCleanup(np.random.set_state, previous)
+
+        def consuming_export(**kwargs):
+            result = original_export(**kwargs)
+            np.random.random()  # Deliberate violation, injected only by this regression test.
+            return result
+
+        with patch.object(pipeline, '_export', side_effect=consuming_export):
+            with self.assertRaises(UnsafePreviewError):
+                PreviewProbe(self.config, self.directory).run(pipeline, None)
+        summary = json.loads((self.directory / 'summary.json').read_text())
+        self.assertEqual(summary['preview']['changedRandomGenerators'], ['numpy'])
+        self.assertFalse(summary['preview']['randomStateUnchanged'])
+        self.assertFalse((self.directory / 'final.glb').exists())
+
     def test_disabled_preview_never_decodes_and_degenerate_surface_is_rejected(self):
         pipeline = FakePipeline()
         PreviewProbe(self.config, self.directory, enabled=False).run(pipeline, None)
