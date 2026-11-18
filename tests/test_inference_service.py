@@ -151,6 +151,24 @@ class ServiceProtocolTests(unittest.TestCase):
             self.assertEqual(len(result.json()['positions']), stage['pointCount'])
         self.assertEqual(self.client.get(f'/api/v1/tasks/{task_id}/previews/4', headers=self.headers).status_code, 404)
 
+    def test_six_versions_are_retained_and_seven_stage_plan_is_rejected(self):
+        stages = [{'step': step, 'resolution': resolution, 'pointCount': count}
+                  for step, resolution, count in [(12, 64, 1000), (15, 64, 1500), (18, 96, 2500),
+                                                   (21, 96, 3500), (24, 128, 4500), (27, 128, 5000)]]
+        response = self.submit(parameters={'previewStages': stages})
+        self.assertEqual(response.status_code, 202)
+        self.engine.release()
+        task_id = response.json()['taskId']
+        state = self.wait_completed(task_id)
+        self.assertEqual(state['previewVersion'], 6)
+        for version, stage in enumerate(stages, 1):
+            result = self.client.get(f'/api/v1/tasks/{task_id}/previews/{version}', headers=self.headers)
+            self.assertEqual(result.status_code, 200)
+            self.assertEqual(result.json()['sourceStep'], stage['step'])
+            self.assertEqual(len(result.json()['positions']), stage['pointCount'])
+        rejected = self.submit(parameters={'previewStages': stages + [{'step': 29, 'resolution': 128, 'pointCount': 5000}]})
+        self.assertEqual(rejected.status_code, 422)
+
     def test_rejects_unordered_duplicate_or_oversized_preview_plans(self):
         for stages in ([{'step': 15, 'resolution': 96, 'pointCount': 2500}, {'step': 6, 'resolution': 64, 'pointCount': 1000}],
                        [{'step': 30, 'resolution': 128, 'pointCount': 5000}],

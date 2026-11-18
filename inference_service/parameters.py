@@ -18,7 +18,7 @@ class TaskParameters(BaseModel):
     previewStep: int = Field(default=24, ge=1, le=49)
     previewResolution: int = Field(default=128, ge=64, le=128)
     pointCount: int = Field(default=5000, ge=1, le=5000)
-    previewStages: list[PreviewStage] | None = Field(default=None, min_length=1, max_length=3)
+    previewStages: list[PreviewStage] | None = Field(default=None, min_length=1, max_length=6)
     numChunks: int = Field(default=4000, ge=1000, le=8000)
 
     @model_validator(mode="after")
